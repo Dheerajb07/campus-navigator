@@ -5,16 +5,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy import spatial
 
+
 # Class for each tree node
 class Node:
     def __init__(self, row, col):
         self.row = row        # coordinate
         self.col = col        # coordinate
-        self.parent = None    # parent node
-        self.cost = 0.0       # cost
+        self.parent = None    # parent node / edge
+        self.cost = 0.0       # cost to parent / edge weight
 
-    def __eq__(self,other):
-        return [self.row,self.col]==[other.row,other.col]
 
 # Class for RRT
 class RRT:
@@ -28,7 +27,6 @@ class RRT:
         self.goal = Node(goal[0], goal[1])    # goal node
         self.vertices = []                    # list of nodes
         self.found = False                    # found flag
-        self.points = []                      # co-ordinartes of vertices
         
 
     def init_map(self):
@@ -36,9 +34,8 @@ class RRT:
         '''
         self.found = False
         self.vertices = []
-        self.points = []
         self.vertices.append(self.start)
-        self.points.append((self.start.row,self.start.col))
+        self.solution = []
 
     
     def dis(self, node1, node2):
@@ -50,13 +47,8 @@ class RRT:
         return:
             euclidean distance between two nodes
         '''
-        ### YOUR CODE HERE ###
-        p1 = np.array([node1.row,node1.col])
-        p2 = np.array([node2.row,node2.col])
-        return np.linalg.norm(p1-p2)
+        return np.sqrt((node1.row-node2.row)**2 + (node1.col-node2.col)**2)
 
-    def is_obstacle(self,point):
-        return not self.map_array[point[0]][point[1]]
     
     def check_collision(self, node1, node2):
         '''Check if the path between two nodes collide with obstacles
@@ -65,98 +57,172 @@ class RRT:
             node2 - node 2
 
         return:
-            True if the new node is valid to be connected
+            True if there are obstacles
+            False if the new node is valid to be connected
         '''
-        ### YOUR CODE HERE ###
-        delta = 1 # spacing between each sample point
-        x1,y1 = (node1.row,node1.col)
-        x2,y2 = (node2.row,node2.col)
-        theta = np.arctan2(y2-y1,x2-x1) # slope of the line
-        sx=x1
-        sy=y1
-        for i in range(1,round(self.dis(node1,node2))+1):
-            sx = round(x1+i*delta*np.cos(theta))
-            sy = round(y1+i*delta*np.sin(theta))
-            if self.is_obstacle([sx,sy]):
-                return False
-        return True
+        # Check obstacle between nodes
+        # get all the points in between
+        points_between = zip(np.linspace(node1.row, node2.row, dtype=int), 
+                             np.linspace(node1.col, node2.col, dtype=int))
+        # check if any of these are obstacles
+        for point in points_between:
+            if self.map_array[point[0]][point[1]] == 0:
+                return True
+        return False
 
 
     def get_new_point(self, goal_bias):
         '''Choose the goal or generate a random point
         arguments:
-            goal_bias - the possibility of choosing the goal instead of a random point - %
+            goal_bias - the possibility of choosing the goal instead of a random point
 
         return:
-            point - the new point - a list [row,col]
+            point - the new point
         '''
-        ### YOUR CODE HERE ###
-        # generate random int
-        p = np.random.randint(100)
-        if p > goal_bias*100:
-            q_rand = np.random.randint([self.size_row,self.size_col])
-            return q_rand
+        # select goal
+        if np.random.random() < goal_bias:
+            point = [self.goal.row, self.goal.col]
+        # or generate a random point
         else:
-            return [self.goal.row,self.goal.col]
+            point = [np.random.randint(0, self.size_row-1), np.random.randint(0, self.size_col-1)]
+        return point
+
+    
+    def get_new_point_in_ellipsoid(self, goal_bias, c_best):
+        '''Choose the goal or generate a random point in an ellipsoid
+           defined by start, goal and current best length of path
+        arguments:
+            goal_bias - the possibility of choosing the goal instead of a random point
+            c_best - the length of the current best path
+
+        return:
+            point - the new point
+        '''
+        # Select goal
+        if np.random.random() < goal_bias:
+            point = [self.goal.row, self.goal.col]
+        
+        #### TODO ####
+        # Generate a random point in an ellipsoid
+        else:
+            # pass
+            # Compute the distance between start and goal - c_min
+            c_min = self.dis(self.start,self.goal)
+            # Calculate center of the ellipsoid - x_center
+            x_start = np.array([self.start.row,self.start.col]).reshape((2,1))
+            x_goal = np.array([self.goal.row,self.goal.col]).reshape((2,1))
+            x_center = (x_start + x_goal)/2
+            # Compute rotation matrix from elipse to world frame - C
+            a1 = (x_goal - x_start)/c_min
+            I1 = np.array([[1,0]])
+            M = a1.dot(I1)
+            U,S,Vt = np.linalg.svd(M)
+            D = np.diag([1,np.linalg.det(U)*np.linalg.det(Vt)])
+            C = (U.dot(D)).dot(Vt)
+            # Compute diagonal matrix - L
+            L = np.diag([c_best/2,np.sqrt(c_best**2 - c_min**2)/2])
+            # Cast a sample from a unit ball - x_ball
+            r = np.random.random()
+            theta = np.random.uniform(-np.pi,np.pi)
+            x_ball = [[r*np.cos(theta)],[r*np.sin(theta)]]
+            # Map ball sample to the ellipsoid - x_rand
+            x_rand = (C.dot(L)).dot(x_ball) + x_center
+
+            point = [int(x_rand[0]),int(x_rand[1])]
+
+        #### TODO END ####
+
+        return point
 
     
     def get_nearest_node(self, point):
-        '''Find the nearest node in self.vertices with respect to the new point
+        '''Find the nearest node from the new point in self.vertices
         arguments:
             point - the new point
 
         return:
             the nearest node
         '''
-        ### YOUR CODE HERE ###
-        self.kdtree = spatial.KDTree(self.points)
-        _,nearest_pt_idx = self.kdtree.query(point,k=1)
-        return self.vertices[nearest_pt_idx]
-        
-    def connect(self,node,parent_node):
+        # Use kdtree to find the neighbors within neighbor size
+        samples = [[v.row, v.col] for v in self.vertices]
+        kdtree = spatial.cKDTree(samples)
+        coord, ind = kdtree.query(point)
+        return self.vertices[ind]
+
+    
+    def sample(self, goal_bias=0.05, c_best=0):
+        '''Sample a random point in the area
+        arguments:
+            goal_bias - the possibility of choosing the goal instead of a random point
+            c_best - the length of the current best path (For informed RRT)
+
+        return:
+            a new node if this node is valid and added, None if not.
+
+        Generate a new point
         '''
-        connect node with its parent
+        # Generate a new point
+
+        #### TODO ####
+        # Regular sampling if c_best <= 0
+        # using self.get_new_point
+        if c_best<=0:
+            new_point = self.get_new_point(goal_bias)
+    
+        # Sampling in an ellipsoid if c_best is a positive value
+        # using self.get_new_point_in_ellipsoid
+        else:
+            new_point = self.get_new_point_in_ellipsoid(goal_bias,c_best)
+        #### TODO END ####
+
+        return new_point
+
+
+    def extend(self, new_point, extend_dis=10):
+        '''Extend a new node to the current tree structure
+        arguments:
+            new_point - the new sampled point in the map
+            extend_dis - extension distance for each step
+
+        return:
+            a new node if this node is valid and added, None if not.
+
+        Extend towards the new point and check feasibility.
+        Create and add a new node if feasible.
         '''
-        node.parent = parent_node
-        node.cost = parent_node.cost + self.dis(node,parent_node)
-        self.vertices.append(node)
-        self.points.append((node.row,node.col))
+        # Get nearest node
+        nearest_node = self.get_nearest_node(new_point)
 
-    def get_new_node(self,node1,node2,step_size):
-                
-        if self.dis(node1,node2)<=step_size:
-            return node2
-            
-        x1,y1 = (node1.row,node1.col)
-        x2,y2 = (node2.row,node2.col)
-        theta = np.arctan2(y2-y1,x2-x1) # slope of the line
+        # Calculate new node location
+        slope = np.arctan2(new_point[1]-nearest_node.col, new_point[0]-nearest_node.row)
+        new_row = nearest_node.row + extend_dis*np.cos(slope)
+        new_col = nearest_node.col + extend_dis*np.sin(slope)
+        new_node = Node(int(new_row), int(new_col))
 
-        sx = round(x1+step_size*np.cos(theta))
-        sy = round(y1+step_size*np.sin(theta))
-        
-        return Node(sx,sy)
+        # Check boundary and collision
+        if (0 <= new_row < self.size_row) and (0 <= new_col < self.size_col) and \
+           not self.check_collision(nearest_node, new_node):
+            # If pass, add the new node
+            new_node.parent = nearest_node
+            new_node.cost = extend_dis
+            self.vertices.append(new_node)
 
-    def add_node(self,node1,node2,step_size):
-        
-        next_node = self.get_new_node(node1,node2,step_size)
+            # Check if goal is close
+            if not self.found:
+                d = self.dis(new_node, self.goal)
+                if d < extend_dis:
+                    self.goal.cost = d
+                    self.goal.parent = new_node
+                    self.vertices.append(self.goal)
+                    self.found = True
+                    
+            return new_node
+        else:
+            return None
 
-        obstruction = False
-        if self.is_obstacle([next_node.row,next_node.col]) or not self.check_collision(node1,next_node):
-            obstruction = True
-        
-        if not obstruction:
-            if next_node == self.goal:
-                self.connect(self.goal,node1)
-                self.found = True
-            elif self.dis(next_node,self.goal)<=step_size:
-                self.connect(self.goal,node1)
-                self.found = True
-            else:
-                self.connect(next_node,node1)
 
-            
     def get_neighbors(self, new_node, neighbor_size):
-        '''Get the neighbors that are within the neighbor distance from the node
+        '''Get the neighbors that is within the neighbor distance from the node
         arguments:
             new_node - a new node
             neighbor_size - the neighbor distance
@@ -164,14 +230,39 @@ class RRT:
         return:
             neighbors - a list of neighbors that are within the neighbor distance 
         '''
-        ### YOUR CODE HERE ###
-        neighbours = []
-        new_point = (new_node.row,new_node.col)
-        self.kdtree = spatial.KDTree(self.points)
-        neighbours_idxs = self.kdtree.query_ball_point(new_point,r=neighbor_size)
-        for idx in neighbours_idxs:
-            neighbours.append(self.vertices[idx])
-        return neighbours
+        # Use kdtree to find the neighbors within neighbor size
+        samples = [[v.row, v.col] for v in self.vertices]
+        kdtree = spatial.cKDTree(samples)
+        ind = kdtree.query_ball_point([new_node.row, new_node.col], neighbor_size)
+        neighbors = [self.vertices[i] for i in ind]
+        # Remove the new_node itself
+        neighbors.remove(new_node)
+        return neighbors
+
+
+    def path_cost(self, start_node, end_node):
+        '''Compute path cost starting from start node to end node
+        arguments:
+            start_node - path start node
+            end_node - path end node
+
+        return:
+            cost - path cost
+        '''
+        cost = 0
+        curr_node = end_node
+        while start_node.row != curr_node.row or start_node.col != curr_node.col:
+            # Keep tracing back until finding the start_node 
+            # or no path exists
+            parent = curr_node.parent
+            if parent is None:
+                print("Invalid Path")
+                return 0
+            cost += curr_node.cost
+            curr_node = parent
+        
+        return cost
+
 
     def rewire(self, new_node, neighbors):
         '''Rewire the new node and all its neighbors
@@ -182,16 +273,36 @@ class RRT:
         Rewire the new node if connecting to a new neighbor node will give least cost.
         Rewire all the other neighbor nodes.
         '''
-        ### YOUR CODE HERE ###
-        for node in neighbors:
-            if self.check_collision(new_node,node):
-                new_cost = new_node.cost + self.dis(new_node,node)
-                if new_cost<=node.cost:
-                    #update parent of neighbour node
-                    node.parent = new_node
-                    node.cost = new_cost
+        # If no neighbors, skip
+        if neighbors == []:
+            return
 
+        # Compute the distance from the new node to the neighbor nodes
+        distances = [self.dis(new_node, node) for node in neighbors]
 
+        # Rewire the new node
+        # compute the least potential cost
+        costs = [d + self.path_cost(self.start, neighbors[i]) for i, d in enumerate(distances)]
+        indices = np.argsort(np.array(costs))
+        # check collision and connect the best node to the new node
+        for i in indices:
+            if not self.check_collision(new_node, neighbors[i]):
+                new_node.parent = neighbors[i]
+                new_node.cost = distances[i]
+                break
+
+        # Rewire new_node's neighbors
+        for i, node in enumerate(neighbors):
+            # new cost
+            new_cost = self.path_cost(self.start, new_node) + distances[i]
+            # if new cost is lower
+            # and there is no obstacles in between
+            if self.path_cost(self.start, node) > new_cost and \
+               not self.check_collision(node, new_node):
+                node.parent = new_node
+                node.cost = distances[i]
+
+    
     def draw_map(self):
         '''Visualization of the result
         '''
@@ -231,35 +342,22 @@ class RRT:
         '''
         # Remove previous result
         self.init_map()
-
-        ### YOUR CODE HERE ###
-
-        # In each step,
-        # get a new point, 
-        # get its nearest node, 
-        # extend the node and check collision to decide whether to add or drop,
-        # if added, check if reach the neighbor region of the goal.
-        step_size = 10
+        # Start searching       
         for i in range(n_pts):
-             q_rand = self.get_new_point(0)
-             if self.is_obstacle(q_rand):
-                 continue
-             rand_node = Node(q_rand[0],q_rand[1])
-             # find nearest node to the random node
-             nearest_node = self.get_nearest_node(tuple(q_rand))
-             # connect rand_node with nearest_node
-             self.add_node(nearest_node,rand_node,step_size)
-             # if extended to goal point - break loop
-             if self.found:
-                 break
+            # Extend a new node until all the points are sampled
+            # or find the path
+            new_point = self.sample(0.05, 0)
+            new_node = self.extend(new_point, 10)
+            if self.found:
+                break
 
         # Output
         if self.found:
             steps = len(self.vertices) - 2
-            length = self.goal.cost
-            print("It took %d nodes to find the current path" %steps)
+            length = self.path_cost(self.start, self.goal)
+            print("It took %d nodes to find the current paths" %steps)
             print("The path length is %.2f" %length)
-        else:
+        if not self.found:
             print("No path found")
         
         # Draw result
@@ -277,54 +375,64 @@ class RRT:
         '''
         # Remove previous result
         self.init_map()
-
-        ### YOUR CODE HERE ###
-
-        # In each step,
-        # get a new point, 
-        # get its nearest node, 
-        # extend the node and check collision to decide whether to add or drop,
-        # if added, rewire the node and its neighbors,
-        # and check if reach the neighbor region of the goal if the path is not found.
-        step_size = 10
+        # Start searching       
         for i in range(n_pts):
-            q_rand = self.get_new_point(0.05)
-            if self.is_obstacle(q_rand):
-                continue
-            rand_node = Node(q_rand[0],q_rand[1])
-            # extend a new_node towards the rand node
-            nearest_node = self.get_nearest_node(tuple(q_rand))
-            new_node = self.get_new_node(nearest_node,rand_node,step_size)
-            # find neighbours to new_node
-            neighbour_nodes = self.get_neighbors(new_node,neighbor_size)
-            if len(neighbour_nodes)==0:
-                continue
-            ## connect new node to the tree
-            # find min cost neighbour node
-            costs = []
-            for node in neighbour_nodes:
-                costs.append(node.cost + self.dis(node,new_node))
-            
-            if not len(costs)==0:
-                min_cost_idx = np.argmin(np.array(costs))
-                min_cost_node = neighbour_nodes[min_cost_idx]
-                if self.check_collision(new_node,min_cost_node):
-                    if new_node == self.goal:
-                        self.connect(self.goal,min_cost_node)
-                        self.found = True
-                    elif self.dis(new_node,self.goal)<=neighbor_size:
-                        self.connect(new_node,min_cost_node)
-                        self.rewire(new_node,neighbour_nodes)
-                        self.connect(self.goal,new_node)
-                        self.found = True
-                    else:
-                        self.connect(new_node,min_cost_node)
-                        self.rewire(new_node,neighbour_nodes)
-            
+            # Extend a new node
+            new_point = self.sample(0.05, 0)
+            new_node = self.extend(new_point, 10)
+            # Rewire
+            if new_node is not None:
+                neighbors = self.get_neighbors(new_node, neighbor_size)
+                self.rewire(new_node, neighbors)
+
         # Output
         if self.found:
             steps = len(self.vertices) - 2
-            length = self.goal.cost
+            length = self.path_cost(self.start, self.goal)
+            print("It took %d nodes to find the current path" %steps)
+            print("The path length is %.2f" %length)
+        else:
+            print("No path found")
+
+        # Draw result
+        self.draw_map()
+
+
+    def informed_RRT_star(self, n_pts=1000, neighbor_size=20):
+        '''Informed RRT* search function
+        arguments:
+            n_pts - number of points try to sample, 
+                    not the number of final sampled points
+            neighbor_size - the neighbor distance
+        
+        In each step, extend a new node if possible, and rewire the node and its neighbors
+        Once a path is found, an ellipsoid will be defined to constrained the sampling area
+        '''
+        # Remove previous result
+        self.init_map()
+        # Start searching       
+        for i in range(n_pts):
+
+            #### TODO ####
+            c_best = 0
+            # Once a path is found, update the best length of path - c_best
+            # using the function self.path_cost(self.start, self.goal)
+            if self.found:
+                c_best = self.path_cost(self.start,self.goal)
+            #### TODO END ####
+
+            # Extend a new node
+            new_point = self.sample(0.05, c_best)
+            new_node = self.extend(new_point, 10)
+            # Rewire
+            if new_node is not None:
+                neighbors = self.get_neighbors(new_node, neighbor_size)
+                self.rewire(new_node, neighbors)
+
+        # Output
+        if self.found:
+            steps = len(self.vertices) - 2
+            length = self.path_cost(self.start, self.goal)
             print("It took %d nodes to find the current path" %steps)
             print("The path length is %.2f" %length)
         else:
